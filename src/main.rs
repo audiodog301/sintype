@@ -1,18 +1,17 @@
-extern crate anyhow;
-extern crate cpal;
-
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
 use std::thread;
+use std::sync::{Arc, Mutex};
 
 use std::io::{stdin, stdout, Write};
 
-enum Generators {
-    Sawtooth(f32), //sawtooth generator with frequency type
+trait Generator {
+    fn next_sample(&mut self, sample_rate: f32) -> f32;
+    fn input_control(&mut self, inputs: Vec<f32>);
 }
 
-//possible instructions for audio thread, with their values to pass. f32 may not be final value format.
-enum Instructions {
-    NewGenerator(Generators, String), //an instruction to make a new generator, with a type and an id
+enum Instruction {
+    NewGenerator(Arc<Mutex<Box<dyn Generator>>>, String), //an instruction to make a new generator, with a type and an id
 }
 
 //simple sawtooth oscillator
@@ -20,51 +19,54 @@ struct Saw {
     frequency: f32,
     count: i32,
     val: f32,
-    id: String
+    id: String,
 }
-  
+
 impl Saw {
-  pub fn new(frequency: f32, count: i32, val: f32, id: String) -> Self {
-      Self {
-        frequency: frequency,
-        count: count,
-        val: val,
-        id: id
-      }
-  }
-  
-  fn set_frequency(&mut self, freq: f32) {
-    self.frequency = freq;
-  }
-
-  fn next_sample(&mut self, sample_rate: f32) -> f32 {
-    if self.count >= (sample_rate / self.frequency) as i32 {
-      self.count = 0;
-    } else {
-      self.count += 1;
-    }
-  
-      
-    if self.count == 0 {
-      self.val = 1.0;
-    } else {
-      self.val -= 1.0 / (sample_rate / self.frequency);
+    pub fn new(frequency: f32, count: i32, val: f32, id: String) -> Self {
+        //TODO fix indentation
+        Self {
+            frequency: frequency,
+            count: count,
+            val: val,
+            id: id,
+        }
     }
 
-    self.val - 0.5
-  }
+    fn set_frequency(&mut self, freq: f32) {
+        self.frequency = freq;
+    }
+
+    fn next_sample(&mut self, sample_rate: f32) -> f32 {
+        if self.count >= (sample_rate / self.frequency) as i32 {
+            self.count = 0;
+        } else {
+            self.count += 1;
+        }
+
+        if self.count == 0 {
+            self.val = 1.0;
+        } else {
+            self.val -= 1.0 / (sample_rate / self.frequency);
+        }
+
+        self.val - 0.5
+    }
 }
 
 #[cfg_attr(target_os = "android", ndk_glue::main(backtrace = "full"))]
 fn main() {
     //get a sender and receiver to send data to the audio thread and retrieve ddata from the audio thread
-    let (command_sender, command_receiver): (crossbeam_channel::Sender<Instructions>, crossbeam_channel::Receiver<Instructions>) = crossbeam_channel::bounded(1024);
-    
+    let (command_sender, command_receiver): (
+        crossbeam_channel::Sender<Instruction>,
+        crossbeam_channel::Receiver<Instruction>,
+    ) = crossbeam_channel::bounded(1024);
+
     //make a vector for threads running.
     let mut children = vec![];
-    
+
     //make the audio thread!
-    children.push(thread::spawn( move ||  {
+    children.push(thread::spawn( move ||  { //TODO: indent closure
     //ABANDON HOPE
     #[cfg(all(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd"), feature = "jack"))]
     
@@ -106,45 +108,46 @@ fn main() {
     loop {
         //grab an input for frequency. TODO: make this actually parse stuff and send different Instructions lol.
         let mut input = String::new();
-        
+
         print!("> ");
         stdout().flush();
 
-        stdin().read_line(&mut input).expect("Error: failed to read user input.");    
-        
+        stdin()
+            .read_line(&mut input)
+            .expect("Error: failed to read user input.");
+
         //send a set frequency instruction to the audio thred with the value the user gave
         //command_sender.send(Instruction::SetFrequency(input.trim().parse::<f32>().expect("Error: it doesn't seem like you entered a number.")));
     }
 }
 
 //LOSE SOME OF THE HOPE YOU GOT BACK BUT NOT ALL (seriously it's not too bad)
-fn run<T>(device: &cpal::Device, config: &cpal::StreamConfig, command_receiver: crossbeam_channel::Receiver<Instructions>) -> Result<(), anyhow::Error>
+fn run<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    command_receiver: crossbeam_channel::Receiver<Instruction>,
+) -> Result<(), anyhow::Error>
 where
     T: cpal::Sample,
 {
     let sample_rate = config.sample_rate.0 as f32;
     let channels = config.channels as usize;
 
-
     let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
 
     let stream = device.build_output_stream(
         config,
-        move |data: &mut [T], _ : &cpal::OutputCallbackInfo| {
+        move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             //for every buffer of audio sort of
             for frame in data.chunks_mut(channels) {
                 //grab a sample from the sawtooth oscillator
                 let value: T = cpal::Sample::from::<f32>(&0.0);
-                
+
                 //parse instructions
-                while let Ok(instruction) = command_receiver.try_recv() { 
+                while let Ok(instruction) = command_receiver.try_recv() {
                     match instruction {
-                        Instructions::NewGenerator(generator, id) => {
-                            match generator {
-                                Sawtooth(frequency) => {
-                                    //pass
-                                }
-                            }
+                        Instruction::NewGenerator(generator, id) => {
+                            //pass
                         }
                     }
                 }
