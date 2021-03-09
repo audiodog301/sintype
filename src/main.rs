@@ -11,7 +11,7 @@ trait Generator {
 }
 
 enum Instruction {
-    NewGenerator(Arc<Mutex<Box<dyn Generator>>>, String), //an instruction to make a new generator, with a type and an id
+    NewGenerator(Arc<Mutex<dyn Generator>>, String), //an instruction to make a new generator, with a type and an id
 }
 
 //simple sawtooth oscillator
@@ -66,7 +66,7 @@ fn main() {
     let mut children = vec![];
 
     //make the audio thread!
-    children.push(thread::spawn( move ||  { //TODO: indent closure
+    children.push(thread::spawn( move ||  { 
     //ABANDON HOPE
     #[cfg(all(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd"), feature = "jack"))]
     
