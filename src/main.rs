@@ -1,17 +1,18 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use std::thread;
-use std::sync::{Arc, Mutex};
 
 use std::io::{stdin, stdout, Write};
 
 trait Generator: Send {
     fn next_sample(&mut self, sample_rate: f32) -> f32;
     fn input_control(&mut self, inputs: Vec<f32>);
+    fn get_id(&self) -> &String;
 }
 
 enum Instruction {
     NewGenerator(Box<dyn Generator>),
+    Delete(String),
 }
 
 //simple sawtooth oscillator
@@ -59,9 +60,12 @@ impl Generator for Saw {
     fn input_control(&mut self, inputs: Vec<f32>) {
 
     }
+
+    fn get_id(&self) -> &String {
+        &self.id
+    }
 }
 
-#[cfg_attr(target_os = "android", ndk_glue::main(backtrace = "full"))]
 fn main() {
     //get a sender and receiver to send data to the audio thread and retrieve ddata from the audio thread
     let (command_sender, command_receiver): (
@@ -123,8 +127,13 @@ fn main() {
             .read_line(&mut input)
             .expect("Error: failed to read user input.");
 
-        //send a set frequency instruction to the audio thred with the value the user gave
-        //command_sender.send(Instruction::SetFrequency(input.trim().parse::<f32>().expect("Error: it doesn't seem like you entered a number.")));
+        let input_parts: Vec<&str> = input.split(" ").collect();
+
+        if input_parts[0] == "new" {
+            command_sender.send(Instruction::NewGenerator(Box::new(Saw::new(input_parts[1].parse::<f32>().expect("ERROR PROBABLY"), 0, 0.0, String::from(input_parts[2])))));
+        } else if input_parts[0] == "del" {
+            command_sender.send(Instruction::Delete(String::from(input_parts[1])));
+        }
     }
 }
 
@@ -142,7 +151,7 @@ where
 
     let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
 
-    let generators: Vec<Box<dyn Generator>> = Vec::new();
+    let mut generators: Vec<Box<dyn Generator>> = Vec::new();
 
     let stream = device.build_output_stream(
         config,
@@ -150,13 +159,24 @@ where
             //for every buffer of audio sort of
             for frame in data.chunks_mut(channels) {
                 //grab a sample from the sawtooth oscillator
-                let value: T = cpal::Sample::from::<f32>(&0.0);
+                let mut out: f32 = 0f32;
+
+                let current_gen_count = generators.len();
+
+                for gen in &mut generators {
+                    out += gen.next_sample(sample_rate) / current_gen_count as f32 / 3f32;
+                }
+                
+                let value: T = cpal::Sample::from::<f32>(&out);
 
                 //parse instructions
                 while let Ok(instruction) = command_receiver.try_recv() {
                     match instruction {
                         Instruction::NewGenerator(generator) => {
-                            println!("new generator");
+                            generators.push(generator);
+                        },
+                        Instruction::Delete(id) => {
+                            generators.retain(|x| *(x.get_id()) != id);
                         }
                     }
                 }
