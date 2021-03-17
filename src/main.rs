@@ -5,16 +5,17 @@ use std::sync::{Arc, Mutex};
 
 use std::io::{stdin, stdout, Write};
 
-trait Generator {
+trait Generator: Send {
     fn next_sample(&mut self, sample_rate: f32) -> f32;
     fn input_control(&mut self, inputs: Vec<f32>);
 }
 
 enum Instruction {
-    NewGenerator(Arc<Mutex<dyn Generator>>, String), //an instruction to make a new generator, with a type and an id
+    NewGenerator(Box<dyn Generator>),
 }
 
 //simple sawtooth oscillator
+#[derive(Clone)]
 struct Saw {
     frequency: f32,
     count: i32,
@@ -36,7 +37,9 @@ impl Saw {
     fn set_frequency(&mut self, freq: f32) {
         self.frequency = freq;
     }
+}
 
+impl Generator for Saw {
     fn next_sample(&mut self, sample_rate: f32) -> f32 {
         if self.count >= (sample_rate / self.frequency) as i32 {
             self.count = 0;
@@ -51,6 +54,10 @@ impl Saw {
         }
 
         self.val - 0.5
+    }
+
+    fn input_control(&mut self, inputs: Vec<f32>) {
+
     }
 }
 
@@ -110,7 +117,7 @@ fn main() {
         let mut input = String::new();
 
         print!("> ");
-        stdout().flush();
+        stdout().flush().expect("Error: Failed to flush stdout");
 
         stdin()
             .read_line(&mut input)
@@ -135,6 +142,8 @@ where
 
     let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
 
+    let generators: Vec<Box<dyn Generator>> = Vec::new();
+
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
@@ -146,8 +155,8 @@ where
                 //parse instructions
                 while let Ok(instruction) = command_receiver.try_recv() {
                     match instruction {
-                        Instruction::NewGenerator(generator, id) => {
-                            //pass
+                        Instruction::NewGenerator(generator) => {
+                            println!("new generator");
                         }
                     }
                 }
