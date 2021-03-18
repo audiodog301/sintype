@@ -4,19 +4,22 @@ use std::thread;
 
 use std::io::{stdin, stdout, Write};
 
+//generators implement this
 trait Generator: Send {
     fn next_sample(&mut self, sample_rate: f32) -> f32;
     fn input_control(&mut self, inputs: Vec<f32>);
     fn get_id(&self) -> &String;
 }
 
+//possible things you can ask the audio thread to do
 enum Instruction {
     NewGenerator(Box<dyn Generator>),
-    Delete(String),
+    DeleteGenerator(String),
 }
 
-//simple sawtooth oscillator
-#[derive(Clone)]
+//simple sawtooth generator
+//TODO: make it not go out of tune the higher it gets
+#[derive(Clone)] //derive here just so that it can be vec'd and retained nicely, etc
 struct Saw {
     frequency: f32,
     count: i32,
@@ -57,9 +60,7 @@ impl Generator for Saw {
         self.val - 0.5
     }
 
-    fn input_control(&mut self, inputs: Vec<f32>) {
-
-    }
+    fn input_control(&mut self, inputs: Vec<f32>) {}
 
     fn get_id(&self) -> &String {
         &self.id
@@ -67,7 +68,7 @@ impl Generator for Saw {
 }
 
 fn main() {
-    //get a sender and receiver to send data to the audio thread and retrieve ddata from the audio thread
+    //get a sender and receiver to send data to the audio thread and retrieve data in the audio thread
     let (command_sender, command_receiver): (
         crossbeam_channel::Sender<Instruction>,
         crossbeam_channel::Receiver<Instruction>,
@@ -77,11 +78,11 @@ fn main() {
     let mut children = vec![];
 
     //make the audio thread!
-    children.push(thread::spawn( move ||  { 
+    children.push(thread::spawn( move ||  {
     //ABANDON HOPE
     #[cfg(all(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd"), feature = "jack"))]
-    
-    // Manually check for flags. Can be passed through cargo with -- e.g.
+
+    //manually check for flags. can be passed through cargo with -- e.g.
     // cargo run --release --example beep --features jack -- --jack
     let host = if std::env::args()
         .collect::<String>()
@@ -115,9 +116,9 @@ fn main() {
         cpal::SampleFormat::U16 => run::<u16>(&device, &config.into(), command_receiver.clone()).unwrap(),
     };}));
 
-    //REFIND YOUR HOPE
+    //RE-FIND YOUR HOPE
     loop {
-        //grab an input for frequency. TODO: make this actually parse stuff and send different Instructions lol.
+        //grab user input
         let mut input = String::new();
 
         print!("> ");
@@ -127,12 +128,19 @@ fn main() {
             .read_line(&mut input)
             .expect("Error: failed to read user input.");
 
+        //perform some basic functions with this input
+        //TODO: implement full parser/interpreter
         let input_parts: Vec<&str> = input.split(" ").collect();
 
         if input_parts[0] == "new" {
-            command_sender.send(Instruction::NewGenerator(Box::new(Saw::new(input_parts[1].parse::<f32>().expect("ERROR PROBABLY"), 0, 0.0, String::from(input_parts[2])))));
+            command_sender.send(Instruction::NewGenerator(Box::new(Saw::new(
+                input_parts[1].parse::<f32>().expect("ERROR PROBABLY"),
+                0,
+                0.0,
+                String::from(input_parts[2]),
+            ))));
         } else if input_parts[0] == "del" {
-            command_sender.send(Instruction::Delete(String::from(input_parts[1])));
+            command_sender.send(Instruction::DeleteGenerator(String::from(input_parts[1])));
         }
     }
 }
@@ -151,6 +159,8 @@ where
 
     let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
 
+    //make a nice list of generators
+    //TODO: make the initialization be proper so that later on we're not allocating anything in the audio thread.
     let mut generators: Vec<Box<dyn Generator>> = Vec::new();
 
     let stream = device.build_output_stream(
@@ -158,32 +168,34 @@ where
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             //for every buffer of audio sort of
             for frame in data.chunks_mut(channels) {
-                //grab a sample from the sawtooth oscillator
                 let mut out: f32 = 0f32;
 
-                let current_gen_count = generators.len();
+                let current_gen_count = generators.len(); //grab the count of generators here so that we're not doing dereferencing borrowing nonsense in the loop below
 
+                //grab samples from all the generators
                 for gen in &mut generators {
-                    out += gen.next_sample(sample_rate) / current_gen_count as f32 / 3f32;
+                    out += (gen.next_sample(sample_rate) / current_gen_count as f32) / 3f32;
+                    //just so that volume remains reasonable before proper volume stuff is implemented
                 }
-                
-                let value: T = cpal::Sample::from::<f32>(&out);
 
-                //parse instructions
+                let value: T = cpal::Sample::from::<f32>(&out); //make it into cpal's sample type
+
+                //grab data from the main thread and perform some tasks based on that data.
                 while let Ok(instruction) = command_receiver.try_recv() {
                     match instruction {
                         Instruction::NewGenerator(generator) => {
                             generators.push(generator);
-                        },
-                        Instruction::Delete(id) => {
+                        }
+                        Instruction::DeleteGenerator(id) => {
                             generators.retain(|x| *(x.get_id()) != id);
                         }
                     }
                 }
 
-                //for every sample of this buffer (left and right samples simultaneously at the same time I think.) TODO: understand how the frame works / how to access individual channels
+                //for every sample of this buffer (left and right samples simultaneously at the same time perhaps???)
+                //TODO: understand how the frame works / how to access individual channels instead of just using copied and pasted code.
                 for sample in frame.iter_mut() {
-                    //make it the sawtooth sample we got earlier
+                    //make it the sample we got earlier
                     *sample = value
                 }
             }
