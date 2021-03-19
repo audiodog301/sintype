@@ -77,6 +77,7 @@ impl Generator for Saw {
 
     fn set_out(&mut self, out: &String) {
         self.out = out.clone();
+        //self.out.pop();
     }
 }
 
@@ -143,7 +144,7 @@ fn main() {
 
         //perform some basic functions with this input
         //TODO: implement full parser/interpreter
-        let input_parts: Vec<&str> = input.split(" ").collect();
+        let input_parts: Vec<&str> = input.trim_end().split(" ").collect();
 
         if input_parts[0] == "new" {
             command_sender.send(Instruction::NewGenerator(Box::new(Saw::new(
@@ -153,12 +154,8 @@ fn main() {
                 String::from(input_parts[2]),
             ))));
         } else if input_parts[0] == "del" {
-            print!("binding\n");
-            stdout().flush().expect("Error: Failed to flush stdout");
             command_sender.send(Instruction::DeleteGenerator(String::from(input_parts[1])));
         } else if input_parts[0] == "bind" {
-            print!("binding\n");
-            stdout().flush().expect("Error: Failed to flush stdout");
             command_sender.send(Instruction::BindGenerator(String::from(input_parts[1]), String::from(input_parts[2])));
         }
     }
