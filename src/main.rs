@@ -9,12 +9,15 @@ trait Generator: Send {
     fn next_sample(&mut self, sample_rate: f32) -> f32;
     fn input_control(&mut self, inputs: Vec<f32>);
     fn get_id(&self) -> &String;
+    fn get_out(&self) -> &String;
+    fn set_out(&mut self, out: &String);
 }
 
 //possible things you can ask the audio thread to do
 enum Instruction {
     NewGenerator(Box<dyn Generator>),
     DeleteGenerator(String),
+    BindGenerator(String, String),
 }
 
 //simple sawtooth generator
@@ -25,6 +28,7 @@ struct Saw {
     count: i32,
     val: f32,
     id: String,
+    out: String,
 }
 
 impl Saw {
@@ -35,6 +39,7 @@ impl Saw {
             count: count,
             val: val,
             id: id,
+            out: String::new(),
         }
     }
 
@@ -64,6 +69,14 @@ impl Generator for Saw {
 
     fn get_id(&self) -> &String {
         &self.id
+    }
+
+    fn get_out(&self) -> &String {
+        &self.out
+    }
+
+    fn set_out(&mut self, out: &String) {
+        self.out = out.clone();
     }
 }
 
@@ -140,7 +153,13 @@ fn main() {
                 String::from(input_parts[2]),
             ))));
         } else if input_parts[0] == "del" {
+            print!("binding\n");
+            stdout().flush().expect("Error: Failed to flush stdout");
             command_sender.send(Instruction::DeleteGenerator(String::from(input_parts[1])));
+        } else if input_parts[0] == "bind" {
+            print!("binding\n");
+            stdout().flush().expect("Error: Failed to flush stdout");
+            command_sender.send(Instruction::BindGenerator(String::from(input_parts[1]), String::from(input_parts[2])));
         }
     }
 }
@@ -172,10 +191,13 @@ where
 
                 let current_gen_count = generators.len(); //grab the count of generators here so that we're not doing dereferencing borrowing nonsense in the loop below
 
+                let output_bus = String::from("out");
+
                 //grab samples from all the generators
                 for gen in &mut generators {
-                    out += (gen.next_sample(sample_rate) / current_gen_count as f32) / 3f32;
-                    //just so that volume remains reasonable before proper volume stuff is implemented
+                    if (gen.get_out() == &output_bus) {
+                        out += (gen.next_sample(sample_rate) / current_gen_count as f32) / 3f32; //just so that volume remains reasonable before proper volume stuff is implemented
+                    }
                 }
 
                 let value: T = cpal::Sample::from::<f32>(&out); //make it into cpal's sample type
@@ -188,6 +210,13 @@ where
                         }
                         Instruction::DeleteGenerator(id) => {
                             generators.retain(|x| *(x.get_id()) != id);
+                        }
+                        Instruction::BindGenerator(id_one, id_two) => {
+                            for generator in &mut generators {
+                                if generator.get_id() == &id_one {
+                                    generator.set_out(&id_two);
+                                }
+                            }
                         }
                     }
                 }
